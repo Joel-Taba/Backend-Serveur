@@ -1,0 +1,27 @@
+# Cœur du framework
+Django>=5.0,<6.0
+djangorestframework>=3.15,<4.0
+
+# Authentification par jetons JWT (accès/rafraîchissement + liste noire au logout)
+djangorestframework-simplejwt>=5.3,<6.0
+
+# CORS, pour le jour où le frontend Next.js sera branché sur cette API
+django-cors-headers>=4.3,<5.0
+
+# Variables d'environnement (.env) — voir config/settings/base.py
+django-environ>=0.11,<1.0
+
+# Miniatures : images + pages de couverture PDF
+Pillow>=10.3,<11.0
+PyMuPDF>=1.24,<2.0
+
+# Vérification des jetons Google (bouton "Continuer avec Google") — optionnel,
+# GoogleAuthView répond 501 proprement si absent.
+google-auth>=2.30,<3.0
+
+# Serveur WSGI de production
+gunicorn>=22.0,<23.0
+
+# Base de données de production (optionnel, seulement si DATABASE_URL pointe
+# vers PostgreSQL — SQLite ne nécessite aucun driver)
+psycopg[binary]>=3.1,<4.0
