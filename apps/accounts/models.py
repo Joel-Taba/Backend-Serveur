@@ -15,8 +15,22 @@ class User(AbstractBaseUser, PermissionsMixin):
         USER = "user", "Utilisateur"
         MANAGER = "manager", "Gestionnaire"
 
-    email = models.EmailField("adresse email", unique=True)
+    class Country(models.TextChoices):
+        """Pays cibles de la plateforme — reprend exactement les options du
+        formulaire d'inscription (SignupForm.tsx)."""
+
+        CAMEROON = "cameroon", "Cameroun"
+        CHAD = "chad", "Tchad"
+        DRC = "drc", "RDC"
+        SENEGAL = "senegal", "Sénégal"
+        BURKINA_FASO = "burkina_faso", "Burkina Faso"
+        NIGER = "niger", "Niger"
+        ALL = "all", "Tous les pays"
+
+    email = models.CharField("adresse email", max_length=254, unique=True)
     full_name = models.CharField("nom complet", max_length=150, blank=True)
+    age = models.PositiveSmallIntegerField("âge", null=True, blank=True)
+    country = models.CharField("pays", max_length=20, choices=Country.choices, blank=True)
     role = models.CharField("rôle", max_length=10, choices=Role.choices, default=Role.USER)
     avatar = models.ImageField("photo de profil", upload_to="avatars/", blank=True, null=True)
 

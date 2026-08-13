@@ -1,6 +1,7 @@
 import os
 
 from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 from apps.common.models import TimeStampedModel
@@ -114,3 +115,30 @@ class Document(TimeStampedModel):
     def get_path_segments(self) -> list[str]:
         base = self.category.get_path_segments() if self.category_id else []
         return base + [self.slug]
+
+
+class DocumentRating(TimeStampedModel):
+    """Note (1 à 5 étoiles) laissée par un utilisateur sur un document —
+    proposée à la sortie du lecteur (voir ReaderShell.tsx côté frontend),
+    réservée aux comptes non-gestionnaires. Une seule note par personne et
+    par document : une nouvelle notation remplace la précédente plutôt que
+    d'en créer une autre (contrainte d'unicité ci-dessous)."""
+
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="ratings", verbose_name="document")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="document_ratings", verbose_name="utilisateur"
+    )
+    stars = models.PositiveSmallIntegerField(
+        "note", validators=[MinValueValidator(1), MaxValueValidator(5)]
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "note de document"
+        verbose_name_plural = "notes de documents"
+        constraints = [
+            models.UniqueConstraint(fields=["document", "user"], name="unique_rating_per_user_and_document"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} → {self.document_id} : {self.stars}★"

@@ -22,6 +22,9 @@ google-auth>=2.30,<3.0
 # Serveur WSGI de production
 gunicorn>=22.0,<23.0
 
+# Fichiers statiques en production (DEBUG=False) sans reverse proxy dédié
+whitenoise>=6.7,<7.0
+
 # Base de données de production (optionnel, seulement si DATABASE_URL pointe
 # vers PostgreSQL — SQLite ne nécessite aucun driver)
 psycopg[binary]>=3.1,<4.0

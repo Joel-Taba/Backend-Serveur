@@ -1,11 +1,25 @@
 import os
 
+from django.db.models import Avg
 from django.urls import reverse
 from rest_framework import serializers
 
-from .models import Category, Document
+from .models import Category, Document, DocumentRating
 from .slugs import slugify
 from .validators import validate_document_extension, validate_document_size
+
+
+class RatingFieldsMixin:
+    """Ajoute la note moyenne et le nombre de votes à un DocumentSerializer —
+    affichée aussi bien côté catalogue public que dans l'espace gestionnaire
+    (même source de vérité, un seul calcul)."""
+
+    def get_average_rating(self, obj: Document) -> float | None:
+        result = obj.ratings.aggregate(avg=Avg("stars"))["avg"]
+        return round(result, 1) if result is not None else None
+
+    def get_ratings_count(self, obj: Document) -> int:
+        return obj.ratings.count()
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -46,7 +60,7 @@ class CategorySerializer(serializers.ModelSerializer):
         return attrs
 
 
-class DocumentSerializer(serializers.ModelSerializer):
+class DocumentSerializer(RatingFieldsMixin, serializers.ModelSerializer):
     """Métadonnées d'un document. `file` n'est accepté qu'à la création
     (upload) — la lecture se fait via `download_url`, jamais en exposant le
     chemin disque, comme côté frontend (/api/file/[...id])."""
@@ -58,6 +72,8 @@ class DocumentSerializer(serializers.ModelSerializer):
     download_url = serializers.SerializerMethodField()
     thumbnail_url = serializers.SerializerMethodField()
     uploaded_by_email = serializers.SerializerMethodField()
+    average_rating = serializers.SerializerMethodField()
+    ratings_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
@@ -73,6 +89,8 @@ class DocumentSerializer(serializers.ModelSerializer):
             "download_url",
             "thumbnail_url",
             "uploaded_by_email",
+            "average_rating",
+            "ratings_count",
             "created_at",
         ]
         read_only_fields = [
@@ -84,6 +102,8 @@ class DocumentSerializer(serializers.ModelSerializer):
             "download_url",
             "thumbnail_url",
             "uploaded_by_email",
+            "average_rating",
+            "ratings_count",
             "created_at",
         ]
 
@@ -131,15 +151,28 @@ class DocumentSerializer(serializers.ModelSerializer):
 # --- Représentation en arbre, miroir de CatalogNode côté frontend ----------
 
 
-class DocumentTreeSerializer(serializers.ModelSerializer):
+class DocumentTreeSerializer(RatingFieldsMixin, serializers.ModelSerializer):
     kind = serializers.SerializerMethodField()
     path = serializers.SerializerMethodField()
     download_url = serializers.SerializerMethodField()
     thumbnail_url = serializers.SerializerMethodField()
+    average_rating = serializers.SerializerMethodField()
+    ratings_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
-        fields = ["kind", "id", "title", "doc_type", "size", "path", "download_url", "thumbnail_url"]
+        fields = [
+            "kind",
+            "id",
+            "title",
+            "doc_type",
+            "size",
+            "path",
+            "download_url",
+            "thumbnail_url",
+            "average_rating",
+            "ratings_count",
+        ]
 
     def get_kind(self, obj: Document) -> str:
         return "document"
@@ -157,6 +190,15 @@ class DocumentTreeSerializer(serializers.ModelSerializer):
 
     def get_thumbnail_url(self, obj: Document) -> str:
         return self._absolute_url("library:document-thumbnail", obj.pk)
+
+
+class DocumentRatingSerializer(serializers.ModelSerializer):
+    """POST /api/library/documents/{id}/rate/ — dépose (ou remplace) la note
+    de l'utilisateur connecté sur ce document."""
+
+    class Meta:
+        model = DocumentRating
+        fields = ["stars"]
 
 
 class CategoryTreeSerializer(serializers.ModelSerializer):

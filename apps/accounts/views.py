@@ -8,6 +8,7 @@ from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import generics, permissions, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -307,6 +308,19 @@ class GoogleAuthView(APIView):
         return Response({"user": UserSerializer(user).data, "created": created, **tokens})
 
 
+class RegisteredAccountsCountView(APIView):
+    """GET /api/accounts/count/ — nombre total de comptes utilisateurs
+    (hors gestionnaires), pour la statistique publique « Comptes créés sur
+    le site » du site vitrine (section Stats.tsx). Ne renvoie qu'un
+    total agrégé, aucune donnée personnelle — safe en accès public."""
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        count = User.objects.filter(role=User.Role.USER).count()
+        return Response({"count": count})
+
+
 class RegistrationHistoryView(generics.ListAPIView):
     """GET /api/accounts/registrations/ — historique des inscriptions,
     réservé aux gestionnaires (section « Inscriptions » du frontend)."""
@@ -314,6 +328,24 @@ class RegistrationHistoryView(generics.ListAPIView):
     queryset = User.objects.all().order_by("-date_joined")
     serializer_class = UserSerializer
     permission_classes = [IsManager]
+
+
+class RegistrationDetailView(generics.RetrieveDestroyAPIView):
+    """GET /api/accounts/registrations/{id}/ — toutes les informations
+    enregistrées pour un compte (jamais le mot de passe, déjà exclu de
+    UserSerializer), pour le bouton « voir les informations » de la section
+    Inscriptions. DELETE — supprime le compte ; volontairement limité aux
+    comptes « utilisateur » pour ne jamais permettre de supprimer un compte
+    gestionnaire (y compris le sien) depuis cet écran."""
+
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [IsManager]
+
+    def perform_destroy(self, instance: User) -> None:
+        if instance.role != User.Role.USER:
+            raise PermissionDenied("Seuls les comptes utilisateurs peuvent être supprimés depuis cet écran.")
+        instance.delete()
 
 
 class LoginHistoryView(generics.ListAPIView):

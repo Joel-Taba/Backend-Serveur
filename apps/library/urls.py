@@ -14,5 +14,6 @@ urlpatterns = [
     path("resolve/<path:path>/", views.DocumentResolveView.as_view(), name="resolve"),
     path("documents/<int:pk>/download/", views.DocumentDownloadView.as_view(), name="document-download"),
     path("documents/<int:pk>/thumbnail/", views.DocumentThumbnailView.as_view(), name="document-thumbnail"),
+    path("documents/<int:pk>/rate/", views.DocumentRateView.as_view(), name="document-rate"),
     path("", include(router.urls)),
 ]

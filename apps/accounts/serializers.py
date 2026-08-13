@@ -1,4 +1,3 @@
-from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from .models import LoginEvent, User
@@ -12,7 +11,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "email", "full_name", "role", "is_active", "date_joined", "avatar_url"]
+        fields = ["id", "email", "full_name", "age", "country", "role", "is_active", "date_joined", "avatar_url"]
         read_only_fields = ["id", "role", "is_active", "date_joined", "avatar_url"]
 
     def get_avatar_url(self, obj: User) -> str | None:
@@ -39,30 +38,24 @@ class PasswordChangeSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True, style={"input_type": "password"})
     new_password = serializers.CharField(write_only=True, style={"input_type": "password"})
 
-    def validate_new_password(self, value: str) -> str:
-        validate_password(value)
-        return value
-
 
 class RegisterSerializer(serializers.ModelSerializer):
     """Reprend exactement les champs du formulaire d'inscription du frontend
     (SignupForm.tsx) : nom complet, email, mot de passe."""
 
     password = serializers.CharField(write_only=True, style={"input_type": "password"})
+    age = serializers.IntegerField(min_value=1, max_value=120)
+    country = serializers.ChoiceField(choices=User.Country.choices)
 
     class Meta:
         model = User
-        fields = ["id", "full_name", "email", "password"]
+        fields = ["id", "full_name", "email", "age", "country", "password"]
         read_only_fields = ["id"]
 
     def validate_email(self, value: str) -> str:
         value = value.strip().lower()
         if User.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError("Un compte existe déjà avec cette adresse email.")
-        return value
-
-    def validate_password(self, value: str) -> str:
-        validate_password(value)
         return value
 
     def create(self, validated_data: dict) -> User:
@@ -73,22 +66,18 @@ class LoginSerializer(serializers.Serializer):
     """Reprend les champs du formulaire de connexion (LoginForm.tsx) :
     email, mot de passe."""
 
-    email = serializers.EmailField()
+    email = serializers.CharField()
     password = serializers.CharField(write_only=True, style={"input_type": "password"})
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    email = serializers.CharField()
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
     uid = serializers.CharField()
     token = serializers.CharField()
     new_password = serializers.CharField(write_only=True, style={"input_type": "password"})
-
-    def validate_new_password(self, value: str) -> str:
-        validate_password(value)
-        return value
 
 
 class GoogleAuthSerializer(serializers.Serializer):

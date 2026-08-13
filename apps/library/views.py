@@ -7,10 +7,16 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.permissions import IsManagerOrReadOnly
+from apps.common.permissions import IsManagerOrReadOnly, IsRegularUser
 
-from .models import Category, Document
-from .serializers import CategorySerializer, CategoryTreeSerializer, DocumentSerializer, DocumentTreeSerializer
+from .models import Category, Document, DocumentRating
+from .serializers import (
+    CategorySerializer,
+    CategoryTreeSerializer,
+    DocumentRatingSerializer,
+    DocumentSerializer,
+    DocumentTreeSerializer,
+)
 from .thumbnails import get_thumbnail_path
 
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
@@ -165,6 +171,24 @@ class DocumentDownloadView(APIView):
             response[key] = value
         response["Content-Length"] = str(total)
         return response
+
+
+class DocumentRateView(APIView):
+    """POST /api/library/documents/{id}/rate/ — dépose (ou remplace) la note
+    de l'utilisateur connecté sur ce document (pop-up à la sortie du
+    lecteur, voir ReaderShell.tsx). Réservé aux comptes non-gestionnaires."""
+
+    permission_classes = [IsRegularUser]
+
+    def post(self, request, pk, *args, **kwargs):
+        document = get_object_or_404(Document, pk=pk)
+        serializer = DocumentRatingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        DocumentRating.objects.update_or_create(
+            document=document, user=request.user, defaults={"stars": serializer.validated_data["stars"]}
+        )
+        return Response(DocumentSerializer(document, context={"request": request}).data)
 
 
 class DocumentThumbnailView(APIView):

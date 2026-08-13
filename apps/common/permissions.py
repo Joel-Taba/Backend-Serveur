@@ -27,3 +27,15 @@ class IsManagerOrReadOnly(BasePermission):
         if request.method in SAFE_METHODS:
             return True
         return _is_manager(request.user)
+
+
+class IsRegularUser(BasePermission):
+    """Connecté, mais PAS gestionnaire — utilisé pour la notation des
+    documents (pop-up à la sortie du lecteur), réservée aux simples
+    lecteurs de la bibliothèque, jamais aux comptes gestionnaires."""
+
+    message = "Cette action n'est pas disponible pour les comptes gestionnaires."
+
+    def has_permission(self, request, view) -> bool:
+        user = request.user
+        return bool(user and user.is_authenticated) and not _is_manager(user)
