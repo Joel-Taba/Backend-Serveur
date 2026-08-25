@@ -86,6 +86,7 @@ class GoogleAuthSerializer(serializers.Serializer):
 
 class LoginEventSerializer(serializers.ModelSerializer):
     user_email = serializers.SerializerMethodField()
+    user_full_name = serializers.SerializerMethodField()
 
     class Meta:
         model = LoginEvent
@@ -93,6 +94,7 @@ class LoginEventSerializer(serializers.ModelSerializer):
             "id",
             "user",
             "user_email",
+            "user_full_name",
             "email_attempted",
             "success",
             "ip_address",
@@ -103,3 +105,6 @@ class LoginEventSerializer(serializers.ModelSerializer):
 
     def get_user_email(self, obj: LoginEvent) -> str | None:
         return obj.user.email if obj.user_id else None
+
+    def get_user_full_name(self, obj: LoginEvent) -> str | None:
+        return obj.user.full_name if obj.user_id else None

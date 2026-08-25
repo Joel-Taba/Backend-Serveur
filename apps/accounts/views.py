@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.contrib.auth import authenticate
@@ -348,10 +349,65 @@ class RegistrationDetailView(generics.RetrieveDestroyAPIView):
         instance.delete()
 
 
+def _period_start(period: str) -> datetime | None:
+    """Début (heure locale) de la période demandée par le tri/purge de
+    l'historique des connexions — "day" = depuis minuit aujourd'hui,
+    "week" = depuis lundi 00h00, "month"/"year" = depuis le 1er du mois/de
+    l'année en cours. `None` (période absente ou inconnue) = pas de filtre,
+    tout l'historique."""
+    if period not in ("day", "week", "month", "year"):
+        return None
+
+    now = timezone.localtime()
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "day":
+        return start_of_day
+    if period == "week":
+        return start_of_day - timedelta(days=start_of_day.weekday())
+    if period == "month":
+        return start_of_day.replace(day=1)
+    return start_of_day.replace(month=1, day=1)
+
+
 class LoginHistoryView(generics.ListAPIView):
-    """GET /api/accounts/login-events/ — historique des connexions, réservé
-    aux gestionnaires (section « Connexions » du frontend)."""
+    """GET /api/accounts/login-events/?period=day|week|month|year —
+    historique des connexions, réservé aux gestionnaires (section
+    « Connexions » du frontend). `period` filtre sur une fenêtre glissante
+    depuis le début du jour/de la semaine/du mois/de l'année en cours ;
+    absent, l'historique complet est renvoyé."""
 
     queryset = LoginEvent.objects.select_related("user").all()
     serializer_class = LoginEventSerializer
     permission_classes = [IsManager]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        start = _period_start(self.request.query_params.get("period", ""))
+        if start is not None:
+            qs = qs.filter(created_at__gte=start)
+        return qs
+
+
+class LoginHistoryClearView(APIView):
+    """DELETE /api/accounts/login-events/clear/?period=day|week|month|year —
+    vide l'historique des connexions sur la période choisie (section
+    « Connexions » du frontend). Réservé aux gestionnaires ; `period` est
+    obligatoire pour éviter de supprimer tout l'historique par erreur."""
+
+    permission_classes = [IsManager]
+
+    def delete(self, request, *args, **kwargs):
+        start = _period_start(request.query_params.get("period", ""))
+        if start is None:
+            return Response(
+                {"detail": "Période invalide (attendu : day, week, month ou year)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        deleted_count, _ = LoginEvent.objects.filter(created_at__gte=start).delete()
+        security_logger.info(
+            "Historique des connexions vidé par %s (période=%s, %d entrée(s))",
+            request.user.email,
+            request.query_params.get("period"),
+            deleted_count,
+        )
+        return Response({"deleted": deleted_count})

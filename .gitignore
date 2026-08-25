@@ -12,6 +12,11 @@ __pycache__/
 # Base de données locale
 db.sqlite3
 db.sqlite3-journal
+db.sqlite3-wal
+db.sqlite3-shm
+
+# Cache fichier (voir CACHES dans config/settings/base.py)
+.cache/
 
 # Fichiers médias téléversés & miniatures générées (contenu, pas du code)
 media/

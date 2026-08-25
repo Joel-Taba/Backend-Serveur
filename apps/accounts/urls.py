@@ -20,4 +20,5 @@ urlpatterns = [
     path("registrations/", views.RegistrationHistoryView.as_view(), name="registrations"),
     path("registrations/<int:pk>/", views.RegistrationDetailView.as_view(), name="registration-detail"),
     path("login-events/", views.LoginHistoryView.as_view(), name="login-events"),
+    path("login-events/clear/", views.LoginHistoryClearView.as_view(), name="login-events-clear"),
 ]

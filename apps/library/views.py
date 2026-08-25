@@ -1,8 +1,12 @@
 import mimetypes
 import re
+from collections import defaultdict
 
+from django.core.cache import cache
+from django.db.models import Avg, Count
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from rest_framework import permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -12,14 +16,23 @@ from apps.common.permissions import IsManagerOrReadOnly, IsRegularUser
 from .models import Category, Document, DocumentRating
 from .serializers import (
     CategorySerializer,
-    CategoryTreeSerializer,
     DocumentRatingSerializer,
     DocumentSerializer,
-    DocumentTreeSerializer,
 )
 from .thumbnails import get_thumbnail_path
 
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
+
+# Arborescence complète : lue à chaque chargement de la page Bibliothèque du
+# site public (LibraryTreeView, AllowAny), mais ne change qu'à chaque action
+# du gestionnaire (ajout/suppression/déplacement). Mise en cache courte,
+# invalidée explicitement dès qu'une catégorie ou un document est modifié
+# (voir perform_create/update/destroy ci-dessous) plutôt que de se reposer
+# uniquement sur le délai d'expiration — un gestionnaire qui vient d'ajouter
+# un document doit le voir apparaître immédiatement, pas jusqu'à 30 s plus
+# tard.
+CACHE_KEY_TREE = "library:tree"
+CACHE_TTL_TREE = 30
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -40,6 +53,18 @@ class CategoryViewSet(viewsets.ModelViewSet):
         if parent_param is not None:
             qs = qs.filter(parent_id=parent_param or None)
         return qs
+
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        cache.delete(CACHE_KEY_TREE)
+
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        cache.delete(CACHE_KEY_TREE)
+
+    def perform_destroy(self, instance):
+        super().perform_destroy(instance)
+        cache.delete(CACHE_KEY_TREE)
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
@@ -79,22 +104,122 @@ class DocumentViewSet(viewsets.ModelViewSet):
             node = node.parent
         return False
 
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        cache.delete(CACHE_KEY_TREE)
+
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        cache.delete(CACHE_KEY_TREE)
+
+    def perform_destroy(self, instance):
+        super().perform_destroy(instance)
+        cache.delete(CACHE_KEY_TREE)
+
+
+def _build_library_tree(request) -> list[dict]:
+    """Construit l'arborescence complète en un nombre de requêtes SQL borné
+    (3, quelle que soit la taille de la bibliothèque), plutôt que l'ancienne
+    version — un serializer DRF récursif qui interrogeait la base à chaque
+    nœud (sous-dossiers, documents, note moyenne, nombre de votes, remontée
+    jusqu'à la racine pour le chemin). Mesuré à plusieurs secondes par
+    requête avec seulement 110 dossiers et 949 documents, et largement
+    responsable de la latence observée sous charge concurrente (voir
+    deploy/benchmark.py) — un classique problème N+1, invisible sur une
+    bibliothèque de test à quelques éléments. Le format JSON produit reste
+    strictement identique à l'ancien (CategoryTreeSerializer et
+    DocumentTreeSerializer ont été retirés) : c'est un contrat partagé avec
+    le frontend (type CatalogNode, lib/catalog.ts)."""
+    categories = list(Category.objects.all())
+    documents = list(Document.objects.all())
+
+    categories_by_id = {c.id: c for c in categories}
+
+    children_by_parent: dict[int | None, list[Category]] = defaultdict(list)
+    for c in categories:
+        children_by_parent[c.parent_id].append(c)
+    for siblings in children_by_parent.values():
+        siblings.sort(key=lambda c: c.name)
+
+    documents_by_category: dict[int | None, list[Document]] = defaultdict(list)
+    for d in documents:
+        documents_by_category[d.category_id].append(d)
+    for siblings in documents_by_category.values():
+        siblings.sort(key=lambda d: d.title)
+
+    # Une seule requête d'agrégation pour TOUS les documents plutôt qu'un
+    # aggregate() par document (voir RatingFieldsMixin, qui reste utilisé
+    # ailleurs pour un objet unique — pertinent seulement hors boucle).
+    rating_stats = {
+        row["document_id"]: (round(row["avg"], 1) if row["avg"] is not None else None, row["count"])
+        for row in DocumentRating.objects.values("document_id").annotate(avg=Avg("stars"), count=Count("id"))
+    }
+
+    path_cache: dict[int, list[str]] = {}
+
+    def category_path(category: Category) -> list[str]:
+        if category.id not in path_cache:
+            segments: list[str] = []
+            node: Category | None = category
+            while node is not None:
+                segments.insert(0, node.slug)
+                node = categories_by_id.get(node.parent_id)
+            path_cache[category.id] = segments
+        return path_cache[category.id]
+
+    def absolute_url(view_name: str, pk: int) -> str:
+        return request.build_absolute_uri(reverse(view_name, args=[pk]))
+
+    def document_node(document: Document) -> dict:
+        parent = categories_by_id.get(document.category_id)
+        path = (category_path(parent) if parent else []) + [document.slug]
+        avg_rating, ratings_count = rating_stats.get(document.id, (None, 0))
+        return {
+            "kind": "document",
+            "id": document.id,
+            "title": document.title,
+            "doc_type": document.doc_type,
+            "size": document.size,
+            "path": path,
+            "download_url": absolute_url("library:document-download", document.id),
+            "thumbnail_url": absolute_url("library:document-thumbnail", document.id),
+            "average_rating": avg_rating,
+            "ratings_count": ratings_count,
+        }
+
+    def category_node(category: Category) -> dict:
+        children = [
+            *(category_node(c) for c in children_by_parent.get(category.id, [])),
+            *(document_node(d) for d in documents_by_category.get(category.id, [])),
+        ]
+        return {
+            "kind": "folder",
+            "id": category.id,
+            "name": category.name,
+            "path": category_path(category),
+            "children": children,
+        }
+
+    return [
+        *(category_node(c) for c in children_by_parent.get(None, [])),
+        *(document_node(d) for d in documents_by_category.get(None, [])),
+    ]
+
 
 class LibraryTreeView(APIView):
     """GET /api/library/tree/ — arborescence complète (dossiers + documents),
     miroir direct de `getCatalogTree()` côté frontend : chaque nœud porte un
-    champ `kind` ("folder" | "document")."""
+    champ `kind` ("folder" | "document"). Mise en cache courte (voir
+    CACHE_KEY_TREE) : c'est la vue la plus consultée du site public, et son
+    contenu ne change qu'à l'initiative du gestionnaire."""
 
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, *args, **kwargs):
-        root_categories = Category.objects.filter(parent__isnull=True).order_by("name")
-        root_documents = Document.objects.filter(category__isnull=True).order_by("title")
-        context = {"request": request}
-        data = [
-            *CategoryTreeSerializer(root_categories, many=True, context=context).data,
-            *DocumentTreeSerializer(root_documents, many=True, context=context).data,
-        ]
+        data = cache.get(CACHE_KEY_TREE)
+        if data is None:
+            data = _build_library_tree(request)
+            cache.set(CACHE_KEY_TREE, data, CACHE_TTL_TREE)
         return Response({"tree": data})
 
 

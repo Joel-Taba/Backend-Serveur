@@ -9,6 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import environ
+from django.db.backends.signals import connection_created
 
 # BASE_DIR pointe sur le dossier Backend/ (racine du projet Django)
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -94,6 +95,52 @@ ASGI_APPLICATION = "config.asgi.application"
 # ---------------------------------------------------------------------------
 DATABASES = {
     "default": env.db("DATABASE_URL", default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
+}
+
+
+def _tune_sqlite_connection(sender, connection, **kwargs) -> None:
+    """SQLite est en mode journal classique par défaut : une écriture pose
+    un verrou exclusif sur tout le fichier, y compris pour les lectures
+    (catalogue, tableau de bord…) qui n'ont pourtant rien à voir avec cette
+    écriture. Le mode WAL (Write-Ahead Logging) permet aux lectures de
+    continuer pendant qu'une écriture est en cours — sans lui, la moindre
+    montée en charge concurrente dégraderait les temps de réponse bien avant
+    que le CPU ou la RAM ne deviennent limitants. `busy_timeout` fait
+    patienter une requête bloquée (au lieu d'échouer immédiatement avec
+    « database is locked ») le temps qu'un verrou se libère — utile dans les
+    rares cas où deux écritures se chevauchent malgré le WAL.
+    Ignoré si la base n'est pas SQLite (ex. DATABASE_URL pointant vers
+    PostgreSQL en production multi-établissements) : ces réglages n'ont pas
+    de sens ailleurs."""
+    if connection.vendor != "sqlite":
+        return
+    with connection.cursor() as cursor:
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.execute("PRAGMA busy_timeout=5000;")
+
+
+connection_created.connect(_tune_sqlite_connection)
+
+# ---------------------------------------------------------------------------
+# Cache — FileBasedCache plutôt que LocMemCache (le cache par défaut de
+# Django) : gunicorn fait tourner plusieurs processus workers indépendants
+# (voir Backend/gunicorn.conf.py), chacun avec sa propre mémoire — un cache
+# en mémoire ne serait donc PAS partagé entre eux (une donnée mise en cache
+# par le worker qui a traité une requête resterait invisible aux deux
+# autres). Le cache fichier, lui, est visible par tous les processus, sans
+# ajouter de service externe (Redis/Memcached) hors de portée d'un serveur
+# unique aux ressources modestes. Utilisé volontairement seulement sur
+# quelques vues à la fraîcheur peu critique (tableau de bord, arborescence
+# de la bibliothèque) via @cache_page — jamais sur des données sensibles à
+# l'utilisateur courant (jamais par défaut sur tout le site).
+# ---------------------------------------------------------------------------
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": str(BASE_DIR / ".cache" / "django"),
+        "TIMEOUT": 60,
+    }
 }
 
 # ---------------------------------------------------------------------------

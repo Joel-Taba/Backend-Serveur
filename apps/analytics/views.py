@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.core.cache import cache
 from django.db.models import Count
 from django.db.models.functions import TruncDate
 from django.utils import timezone
@@ -14,6 +15,17 @@ from .models import Visit
 from .serializers import DashboardSerializer, TrackVisitSerializer
 
 VISITS_WINDOW_DAYS = 14
+
+# Le calcul du tableau de bord parcourt récursivement toute l'arborescence
+# de catégories (_documents_recursive_count) : coûteux à recalculer à
+# chaque ouverture de la page, alors que ces chiffres n'ont pas besoin
+# d'être à la seconde près. Pas d'invalidation explicite ici (contrairement
+# à CACHE_KEY_TREE dans apps.library) : les visites s'incrémentent en
+# continu à chaque chargement de page, invalider à chaque écriture viderait
+# le cache en permanence et annulerait tout le bénéfice — on accepte une
+# fraîcheur de quelques dizaines de secondes.
+CACHE_KEY_DASHBOARD = "analytics:dashboard"
+CACHE_TTL_DASHBOARD = 30
 
 
 def _client_ip(request) -> str | None:
@@ -75,26 +87,29 @@ class DashboardView(APIView):
     permission_classes = [IsManager]
 
     def get(self, request, *args, **kwargs):
-        today = timezone.localdate()
+        data = cache.get(CACHE_KEY_DASHBOARD)
+        if data is None:
+            today = timezone.localdate()
 
-        format_breakdown = [
-            {"label": row["doc_type"], "value": row["value"]}
-            for row in Document.objects.values("doc_type").annotate(value=Count("id")).order_by("-value")
-            if row["doc_type"]
-        ]
+            format_breakdown = [
+                {"label": row["doc_type"], "value": row["value"]}
+                for row in Document.objects.values("doc_type").annotate(value=Count("id")).order_by("-value")
+                if row["doc_type"]
+            ]
 
-        category_breakdown = [
-            {"label": category.name, "value": _documents_recursive_count(category)}
-            for category in Category.objects.filter(parent__isnull=True).order_by("name")
-        ]
+            category_breakdown = [
+                {"label": category.name, "value": _documents_recursive_count(category)}
+                for category in Category.objects.filter(parent__isnull=True).order_by("name")
+            ]
 
-        data = {
-            "document_count": Document.objects.count(),
-            "folder_count": Category.objects.count(),
-            "today_visits": Visit.objects.filter(created_at__date=today).count(),
-            "total_visits": Visit.objects.count(),
-            "visits": _daily_visit_counts(VISITS_WINDOW_DAYS),
-            "category_breakdown": category_breakdown,
-            "format_breakdown": format_breakdown,
-        }
+            data = {
+                "document_count": Document.objects.count(),
+                "folder_count": Category.objects.count(),
+                "today_visits": Visit.objects.filter(created_at__date=today).count(),
+                "total_visits": Visit.objects.count(),
+                "visits": _daily_visit_counts(VISITS_WINDOW_DAYS),
+                "category_breakdown": category_breakdown,
+                "format_breakdown": format_breakdown,
+            }
+            cache.set(CACHE_KEY_DASHBOARD, data, CACHE_TTL_DASHBOARD)
         return Response(DashboardSerializer(data).data)

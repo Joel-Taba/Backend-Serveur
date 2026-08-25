@@ -148,48 +148,13 @@ class DocumentSerializer(RatingFieldsMixin, serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-# --- Représentation en arbre, miroir de CatalogNode côté frontend ----------
-
-
-class DocumentTreeSerializer(RatingFieldsMixin, serializers.ModelSerializer):
-    kind = serializers.SerializerMethodField()
-    path = serializers.SerializerMethodField()
-    download_url = serializers.SerializerMethodField()
-    thumbnail_url = serializers.SerializerMethodField()
-    average_rating = serializers.SerializerMethodField()
-    ratings_count = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Document
-        fields = [
-            "kind",
-            "id",
-            "title",
-            "doc_type",
-            "size",
-            "path",
-            "download_url",
-            "thumbnail_url",
-            "average_rating",
-            "ratings_count",
-        ]
-
-    def get_kind(self, obj: Document) -> str:
-        return "document"
-
-    def get_path(self, obj: Document) -> list[str]:
-        return obj.get_path_segments()
-
-    def _absolute_url(self, view_name: str, pk) -> str:
-        request = self.context.get("request")
-        url = reverse(view_name, args=[pk])
-        return request.build_absolute_uri(url) if request else url
-
-    def get_download_url(self, obj: Document) -> str:
-        return self._absolute_url("library:document-download", obj.pk)
-
-    def get_thumbnail_url(self, obj: Document) -> str:
-        return self._absolute_url("library:document-thumbnail", obj.pk)
+# NOTE : la représentation en arbre (miroir de CatalogNode côté frontend) ne
+# passe plus par des serializers DRF récursifs (CategoryTreeSerializer /
+# DocumentTreeSerializer, supprimés) — chaque nœud imbriqué déclenchait ses
+# propres requêtes SQL (sous-dossiers, documents, notes, chemin), un
+# problème N+1 mesuré à plusieurs secondes par requête sur la bibliothèque
+# réelle. Voir `_build_library_tree()` dans apps/library/views.py, qui
+# produit exactement le même JSON en un nombre de requêtes borné.
 
 
 class DocumentRatingSerializer(serializers.ModelSerializer):
@@ -199,28 +164,3 @@ class DocumentRatingSerializer(serializers.ModelSerializer):
     class Meta:
         model = DocumentRating
         fields = ["stars"]
-
-
-class CategoryTreeSerializer(serializers.ModelSerializer):
-    kind = serializers.SerializerMethodField()
-    path = serializers.SerializerMethodField()
-    children = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Category
-        fields = ["kind", "id", "name", "path", "children"]
-
-    def get_kind(self, obj: Category) -> str:
-        return "folder"
-
-    def get_path(self, obj: Category) -> list[str]:
-        return obj.get_path_segments()
-
-    def get_children(self, obj: Category) -> list[dict]:
-        sub_categories = obj.children.all().order_by("name")
-        sub_documents = obj.documents.all().order_by("title")
-        context = self.context
-        return [
-            *CategoryTreeSerializer(sub_categories, many=True, context=context).data,
-            *DocumentTreeSerializer(sub_documents, many=True, context=context).data,
-        ]
